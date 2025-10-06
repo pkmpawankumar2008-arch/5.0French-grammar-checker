@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vérificateur de grammaire français</title>
+  <style>
+    :root { --bg:#ffffff; --ink:#1f2937; --muted:#6b7280; --pri:#2563eb; --err:#dc2626; --ok:#059669; --border:#e5e7eb; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; color: var(--ink); background: var(--bg); }
+    header { padding: 24px 16px; border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0 0 6px; font-size: 20px; }
+    header p { margin: 0; color: var(--muted); font-size: 14px; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+    .editor { display: grid; grid-template-columns: 1fr 360px; gap: 16px; }
+    .box { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: #fff; }
+    textarea { width: 100%; height: 320px; border: none; outline: none; resize: vertical; font-size: 16px; line-height: 1.5; }
+    .actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
+    .left { display: flex; gap: 8px; align-items: center; }
+    button.primary { background: var(--pri); color: #fff; border: none; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+    button.secondary { background: #f3f4f6; color: var(--ink); border: 1px solid var(--border); padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+    .status { font-size: 13px; color: var(--muted); }
+    .panel h2 { margin: 4px 0 12px; font-size: 16px; }
+    .issue { border-top: 1px solid var(--border); padding: 10px 0; }
+    .issue:first-child { border-top: none; }
+    .issue .msg { margin: 4px 0; }
+    .issue .loc { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: #f9fafb; padding: 6px 8px; border-radius: 6px; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .chip { border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px; cursor: pointer; background: #fff; }
+    .chip:hover { border-color: var(--pri); color: var(--pri); }
+    .legend { display: flex; gap: 10px; font-size: 12px; color: var(--muted); }
+    .underline { text-decoration: underline; text-decoration-thickness: 3px; text-underline-offset: 2px; }
+    .u-err { text-decoration-color: var(--err); }
+    .u-style { text-decoration-color: #eab308; }
+    .u-spell { text-decoration-color: #fb7185; }
+    .success { color: var(--ok); }
+    @media (max-width: 960px) {
+      .editor { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Vérificateur de grammaire français (IA)</h1>
+      <p>Collez votre texte, cliquez sur « Vérifier » et corrigez les suggestions affichées ci‑dessous.</p>
+      <div class="legend">
+        <span><span class="underline u-err">—</span> Grammaire</span>
+        <span><span class="underline u-spell">—</span> Orthographe</span>
+        <span><span class="underline u-style">—</span> Style</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="editor">
+      <section class="box">
+        <textarea id="text" placeholder="Collez votre texte en français ici…"></textarea>
+        <div class="actions">
+          <div class="left">
+            <button id="checkBtn" class="primary">Vérifier</button>
+            <button id="clearBtn" class="secondary">Effacer</button>
+            <button id="copyBtn" class="secondary">Copier le texte corrigé</button>
+          </div>
+          <div class="status" id="status">Prêt</div>
+        </div>
+      </section>
+
+      <aside class="box panel">
+        <h2>Suggestions</h2>
+        <div id="issues"></div>
+      </aside>
+    </div>
+
+    <section class="box" style="margin-top:16px">
+      <h3 style="margin:0 0 8px;font-size:16px">Texte avec surlignage</h3>
+      <div id="highlighted" style="white-space:pre-wrap; line-height:1.6;"></div>
+    </section>
+  </main>
+
+  <script>
+    const LT_ENDPOINT = '/api/check'; // use proxy; or set to 'https://api.languagetool.org/v2/check'
+    const statusEl = document.getElementById('status');
+    const textEl = document.getElementById('text');
+    const issuesEl = document.getElementById('issues');
+    const highlightedEl = document.getElementById('highlighted');
+    const checkBtn = document.getElementById('checkBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const copyBtn = document.getElementById('copyBtn');
+
+    let lastMatches = [];
+
+    async function checkText() {
+      const text = textEl.value || '';
+      if (!text.trim()) {
+        issuesEl.innerHTML = '<p class="status">Aucun texte.</p>';
+        highlightedEl.textContent = '';
+        return;
+      }
+      statusEl.textContent = 'Analyse…';
+      try {
+        const res = await fetch(LT_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, language: 'fr' })
+        });
+        if (!res.ok) throw new Error('Erreur API');
+        const data = await res.json();
+        lastMatches = (data.matches || []).sort((a,b)=>a.offset-b.offset);
+        renderIssues(text, lastMatches);
+        renderHighlights(text, lastMatches);
+        statusEl.innerHTML = lastMatches.length
+          ? lastMatches.length + ' suggestion(s) trouvée(s)'
+          : '<span class="success">Aucune erreur détectée</span>';
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Échec de l’analyse';
+      }
+    }
+
+    function classify(match) {
+      const cat = (match.rule && (match.rule.category?.id || match.rule.category?.name || '')).toLowerCase();
+      if (cat.includes('spelling') || cat.includes('orthographe')) return 'spell';
+      if (cat.includes('style')) return 'style';
+      return 'err';
+    }
+
+    function renderIssues(text, matches) {
+      if (!matches.length) { issuesEl.innerHTML = '<p class="status">Rien à corriger.</p>'; return; }
+      issuesEl.innerHTML = '';
+      matches.forEach((m, idx) => {
+        const frag = text.substr(m.offset, m.length);
+        const repls = (m.replacements || []).slice(0, 4).map(r => r.value);
+        const div = document.createElement('div');
+        div.className = 'issue';
+        div.innerHTML = `
+          <div class="loc">${escapeHtml(frag)}</div>
+          <div class="msg">${escapeHtml(m.message || 'Suggestion')}</div>
+          <div class="chips">${repls.map(v=>`<span class="chip" data-i="${idx}" data-val="${escapeHtml(v)}">${escapeHtml(v)}</span>`).join('')}</div>
+        `;
+        issuesEl.appendChild(div);
+      });
+      issuesEl.addEventListener('click', onChipClick);
+    }
+
+    function onChipClick(e) {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      const i = +chip.dataset.i;
+      const val = chip.dataset.val;
+      applyReplacement(i, val);
+    }
+
+    function applyReplacement(i, replacement) {
+      const text = textEl.value;
+      const m = lastMatches[i];
+      if (!m) return;
+      const before = text.slice(0, m.offset);
+      const after = text.slice(m.offset + m.length);
+      const newText = before + replacement + after;
+      textEl.value = newText;
+      // Recalculate by re-checking to update offsets
+      checkText();
+    }
+
+    function renderHighlights(text, matches) {
+      let out = '';
+      let cursor = 0;
+      matches.forEach(m => {
+        const cls = classify(m);
+        out += escapeHtml(text.slice(cursor, m.offset));
+        const span = escapeHtml(text.substr(m.offset, m.length));
+        const className = cls === 'spell' ? 'u-spell' : (cls === 'style' ? 'u-style' : 'u-err');
+        out += `<span class="underline ${className}">${span}</span>`;
+        cursor = m.offset + m.length;
+      });
+      out += escapeHtml(text.slice(cursor));
+      highlightedEl.innerHTML = out;
+    }
+
+    function escapeHtml(s='') {
+      return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    checkBtn.addEventListener('click', checkText);
+    clearBtn.addEventListener('click', () => {
+      textEl.value = '';
+      issuesEl.innerHTML = '';
+      highlightedEl.textContent = '';
+      statusEl.textContent = 'Prêt';
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      // naive: apply top replacement for all matches in order
+      let text = textEl.value;
+      // Re-apply from lastMatches snapshot
+      // To avoid offset shift, rebuild using segments
+      const repl = [];
+      let pos = 0;
+      lastMatches.forEach(m => {
+        const best = (m.replacements && m.replacements[0]?.value) || text.substr(m.offset, m.length);
+        repl.push(text.slice(pos, m.offset));
+        repl.push(best);
+        pos = m.offset + m.length;
+      });
+      repl.push(text.slice(pos));
+      const final = repl.join('');
+      try {
+        await navigator.clipboard.writeText(final);
+        statusEl.textContent = 'Texte corrigé copié';
+      } catch {
+        statusEl.textContent = 'Copie impossible';
+      }
+    });
+  </script>
+</body>
+</html>
